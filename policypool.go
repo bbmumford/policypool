@@ -140,9 +140,11 @@ func openProved(ctx context.Context, base driver.Connector, policy ConnectionPol
 // any read-back can see, and only a rejected write proves the rest.
 //
 // Its errors are Open's kinds with the same redaction, so a boot that records
-// the answer can also record why there was none: ErrUnreachable,
-// ErrUnauthorized and ErrNotADatabase say the question never reached the
-// setting.
+// the answer can also record why there was none. An error leaves the answer
+// unknown; the false beside it is not a measured result. ErrUnreachable,
+// ErrUnauthorized and ErrNotADatabase name what stopped the probe before it saw
+// the setting on, which can come after it read the setting off, as with a
+// credential that may read the setting but not change it.
 func ProbeForeignKeys(ctx context.Context, base driver.Connector) (enforced bool, err error) {
 	if ctx == nil || base == nil {
 		return false, ErrPolicyRefused

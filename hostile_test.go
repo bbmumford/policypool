@@ -44,6 +44,7 @@ type hostilePlan struct {
 	enableErr        error
 	refuseEnable     bool
 	closeErr         error
+	pingErr          error
 	runtimeErr       error
 	badRuntimeOnce   bool
 }
@@ -125,7 +126,7 @@ func (c *hostileConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("transactions unsupported")
 }
 
-func (c *hostileConn) Ping(context.Context) error { return nil }
+func (c *hostileConn) Ping(context.Context) error { return c.plan.pingErr }
 
 func (c *hostileConn) ResetSession(context.Context) error { return c.plan.resetErr }
 

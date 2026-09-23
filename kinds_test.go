@@ -2,6 +2,7 @@ package policypool
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -376,4 +377,78 @@ func TestResetFailuresStayDiscardBearingAndKeepTheirKind(t *testing.T) {
 		t.Fatalf("canceled reset = %q, want driver.ErrBadConn and context.Canceled", err)
 	}
 	assertNoKind(t, err)
+}
+
+// TestAReachedServerOutranksAConnectPhrase pins classify's order: a message
+// that names a refused credential or an unreadable file shows the server or
+// file was reached, whatever connect phrase the same message also carries.
+func TestAReachedServerOutranksAConnectPhrase(t *testing.T) {
+	for _, test := range []struct {
+		text string
+		kind error
+	}{
+		{text: "status: Unavailable, message: \"error code 401: Unauthorized\"", kind: ErrUnauthorized},
+		{text: "error trying to connect: SQLite failure: `file is not a database`", kind: ErrNotADatabase},
+	} {
+		assertKind(t, publicError(secretCause(test.text)), test.kind)
+	}
+}
+
+// closingConnector is a caller's connector whose Close fails. The pool closes
+// the connector it was given when that connector implements io.Closer.
+type closingConnector struct {
+	driver.Connector
+	err error
+}
+
+func (c *closingConnector) Close() error { return c.err }
+
+// TestCloseFailuresCarryAKindAndNoDriverText: closing a pool closes its idle
+// policy connections and the caller's connector, and database/sql returns
+// their failures from Close.
+func TestCloseFailuresCarryAKindAndNoDriverText(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		base driver.Connector
+		want error
+	}{
+		{name: "policy connection", want: ErrUnreachable, base: &dsnConnector{dsn: "dsn=" + kindSecret,
+			base: &hostileScenario{plans: []hostilePlan{{state: 1, closeErr: dialRefused("db.example")}}}}},
+		{name: "connector", want: ErrDriverFailed, base: &closingConnector{err: secretCause("opaque close failure"),
+			Connector: &dsnConnector{base: &hostileScenario{plans: []hostilePlan{{state: 1}}}, dsn: "dsn=" + kindSecret}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := OpenConnector(context.Background(), test.base, ForeignKeysRequired)
+			if err != nil {
+				t.Fatalf("OpenConnector: %v", err)
+			}
+			assertKind(t, db.Close(), test.want)
+		})
+	}
+}
+
+// nilConnDriver breaks the database/sql contract as a Driver and as a
+// Connector: it returns no connection and no error.
+type nilConnDriver struct{}
+
+func (nilConnDriver) Open(string) (driver.Conn, error)             { return nil, nil }
+func (nilConnDriver) Connect(context.Context) (driver.Conn, error) { return nil, nil }
+func (d nilConnDriver) Driver() driver.Driver                      { return d }
+
+// TestANilConnectionIsDriverFailed: a driver that returns neither a connection
+// nor an error broke its contract; no policy was tried, so no policy kind applies.
+func TestANilConnectionIsDriverFailed(t *testing.T) {
+	name := fmt.Sprintf("policypool_nilconn_%d", hostileDriverSequence.Add(1))
+	sql.Register(name, nilConnDriver{})
+	db, err := Open(context.Background(), name, "dsn="+kindSecret, ForeignKeysRequired)
+	if db != nil {
+		_ = db.Close()
+	}
+	assertKind(t, err, ErrDriverFailed, name)
+	if db, err = OpenConnector(context.Background(), nilConnDriver{}, ForeignKeysRequired); db != nil {
+		_ = db.Close()
+	}
+	assertKind(t, err, ErrDriverFailed)
+	_, err = ProbeForeignKeys(context.Background(), nilConnDriver{})
+	assertKind(t, err, ErrDriverFailed)
 }

@@ -227,3 +227,29 @@ func TestATimeoutsKindSurvivesASecondPass(t *testing.T) {
 	late.end()
 	assertKind(t, publicErrorUnder(late, first), ErrUnreachable)
 }
+
+// TestAPingFailureIsClassifiedUnderTheCallersContext: Open and OpenConnector
+// prove a pool with a Ping, whose failure is the driver's raw error until
+// openProved classifies it, so whose deadline stopped it is decided there.
+func TestAPingFailureIsClassifiedUnderTheCallersContext(t *testing.T) {
+	pools := []kindEntry{openEntry, connectorEntry}
+	for _, entry := range pools {
+		t.Run("driver timeout under a live context/"+entry.name, func(t *testing.T) {
+			scenario := &hostileScenario{plans: []hostilePlan{{state: 1, pingErr: driverDialTimeout(t)}}}
+			err, hidden := entry.open(context.Background(), t, scenario)
+			assertKind(t, err, ErrUnreachable, hidden)
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error %q claims the caller's deadline", err)
+			}
+		})
+		t.Run("socket timeout past the caller's deadline/"+entry.name, func(t *testing.T) {
+			scenario := &hostileScenario{plans: []hostilePlan{{state: 1, pingErr: socketTimeout()}}}
+			err, hidden := entry.open(pastDeadlineContext{context.Background()}, t, scenario)
+			assertReachedOnce(t, scenario)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error %q lost the caller's deadline", err)
+			}
+			assertNoKind(t, err, hidden)
+		})
+	}
+}

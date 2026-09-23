@@ -98,8 +98,8 @@ func kindOf(err error) error {
 const sqliteNotADatabase = 26
 
 // The text each driver below gives a condition it reports only as text,
-// matched lower-cased. Every entry is a phrase the named driver was measured to
-// produce: libsql-client-go for a refused token ("error code 401: Unauthorized"
+// matched lower-cased. Every entry is a phrase the named driver produces:
+// libsql-client-go for a refused token ("error code 401: Unauthorized"
 // over HTTP, "handshake error: Authentication failed" over WebSocket); go-libsql
 // for a refused or read-only token ("status=401 Unauthorized", "status:
 // PermissionDenied ... Not authorized to execute query"), a server it could not
