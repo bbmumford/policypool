@@ -71,9 +71,9 @@ func (c *policyConn) refuses(query string) bool {
 
 func (c *policyConn) Close() error { return publicError(c.Conn.Close()) }
 
-// Prepare is the legacy entry the embedded driver.Conn would otherwise promote
-// unguarded. database/sql calls PrepareContext instead, but a caller holding the
-// driver connection through sql.Conn.Raw can call this one directly.
+// Prepare is the context-free entry the embedded driver.Conn would otherwise
+// promote unguarded. database/sql calls PrepareContext instead, but a caller
+// holding the driver connection through sql.Conn.Raw can call this one directly.
 func (c *policyConn) Prepare(query string) (driver.Stmt, error) {
 	if c.refuses(query) {
 		return nil, errPolicyRefused

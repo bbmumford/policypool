@@ -81,8 +81,8 @@ type statementEntry struct {
 }
 
 // statementEntries reach every policyConn method that takes SQL text,
-// including the legacy Prepare a caller holding the driver connection through
-// sql.Conn.Raw can call directly.
+// including the context-free Prepare a caller holding the driver connection
+// through sql.Conn.Raw can call directly.
 var statementEntries = []statementEntry{
 	{name: "exec", run: func(ctx context.Context, conn *sql.Conn, query string) error {
 		_, err := conn.ExecContext(ctx, query)
