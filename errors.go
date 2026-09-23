@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"time"
 )
 
 var (
@@ -66,9 +67,8 @@ func preferredCause(primary, secondary error) error {
 // before it leaves the package.
 //
 // WHAT IT CONSUMES: a driver error, one of this package's own, or an earlier
-// publicError result. WHAT CONSUMES IT: Open, OpenConnector, ProbeForeignKeys,
-// the pool connector's Connect and Close, a policy connection's Close, and
-// resetError.
+// publicError result. WHAT CONSUMES IT: publicErrorUnder, the pool connector's
+// Close, a policy connection's Close, and resetError.
 //
 // CONDITIONS. A cancelled or expired context keeps its identity and carries no
 // kind, and is checked first because a dial the context stopped is also a
@@ -87,7 +87,73 @@ func publicError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errDeadline
 	}
-	kind := kindOf(err)
+	return besideBadConn(kindOf(err), err)
+}
+
+// publicErrorUnder is publicError for a failure of a call made under the
+// caller's ctx.
+//
+// WHAT CONSUMES IT: Open, OpenConnector, ProbeForeignKeys and the pool
+// connector's Connect, which each hold the context their caller passed.
+//
+// CONDITIONS. A timeout or cancellation is the caller's only when the caller's
+// context has ended. The result is then that context's identity and no kind,
+// whatever form the driver gave the failure: net's connect sets the socket
+// deadline from ctx, so a dial the caller's deadline stopped can come back as
+// a bare i/o timeout, which is not DeadlineExceeded and would otherwise read
+// as ErrUnreachable. While the caller's context is live, a DeadlineExceeded is
+// a deadline the driver set for itself, as net/http's default transport does
+// with the 30-second dial timeout libsql-client-go's requests run under. When
+// classify places it as a dial, lookup or transfer, the result is
+// ErrUnreachable without the caller's DeadlineExceeded identity. Everything
+// else is publicError's.
+func publicErrorUnder(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ended := callerEnded(ctx); ended != nil {
+		if timedOutOrCanceled(err) {
+			return publicError(ended)
+		}
+		return publicError(err)
+	}
+	if !errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded) && classify(err) == ErrUnreachable {
+		return besideBadConn(ErrUnreachable, err)
+	}
+	return publicError(err)
+}
+
+// callerEnded returns the error of a caller's context that was cancelled or
+// has reached its deadline, and nil for a live or absent one. It reads the
+// deadline as well as Err because the socket deadline net's connect takes from
+// ctx can fire before ctx's own timer marks it expired.
+func callerEnded(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// timedOutOrCanceled reports whether err is a cancellation or a timeout in any
+// of the forms net and net/http give one: a context sentinel, or an error in
+// the chain whose Timeout method reports true, as *url.Error, *net.OpError and
+// os.ErrDeadlineExceeded do.
+func timedOutOrCanceled(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
+}
+
+// besideBadConn is kind, joined with driver.ErrBadConn when err carries it.
+func besideBadConn(kind, err error) error {
 	if errors.Is(err, driver.ErrBadConn) {
 		return errors.Join(kind, driver.ErrBadConn)
 	}

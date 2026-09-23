@@ -37,27 +37,28 @@ const (
 // instead is one kind, told apart with errors.Is: ErrPolicyRefused,
 // ErrPolicyUnproved, ErrUnreachable, ErrUnauthorized, ErrNotADatabase or
 // ErrDriverFailed. No kind carries any of the driver's text. Cancellation and
-// driver.ErrBadConn retain errors.Is identity; a cancelled or expired open
-// carries no kind.
+// driver.ErrBadConn retain errors.Is identity; an open that ctx cancelled or
+// that reached ctx's deadline carries no kind, and a timeout the driver set for
+// itself that stopped a dial while ctx was live is ErrUnreachable.
 func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) (*sql.DB, error) {
 	if ctx == nil || policy != ForeignKeysRequired {
 		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, publicError(err)
+		return nil, publicErrorUnder(ctx, err)
 	}
 
 	registered, err := sql.Open(driverName, dsn)
 	if err != nil {
-		return nil, publicError(err)
+		return nil, publicErrorUnder(ctx, err)
 	}
 	baseDriver := registered.Driver()
 	if err := registered.Close(); err != nil {
-		return nil, publicError(err)
+		return nil, publicErrorUnder(ctx, err)
 	}
 	base, err := connectorFor(baseDriver, dsn)
 	if err != nil || base == nil {
-		return nil, publicError(preferredCause(err, ErrDriverFailed))
+		return nil, publicErrorUnder(ctx, preferredCause(err, ErrDriverFailed))
 	}
 
 	return openProved(ctx, base, policy)
@@ -93,7 +94,7 @@ func OpenConnector(ctx context.Context, base driver.Connector, policy Connection
 		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, publicError(err)
+		return nil, publicErrorUnder(ctx, err)
 	}
 	return openProved(ctx, base, policy)
 }
@@ -105,10 +106,10 @@ func OpenConnector(ctx context.Context, base driver.Connector, policy Connection
 func openProved(ctx context.Context, base driver.Connector, policy ConnectionPolicy) (*sql.DB, error) {
 	db := sql.OpenDB(&policyConnector{base: base, policy: policy})
 	if err := db.PingContext(ctx); err != nil {
-		return nil, publicError(preferredCause(err, db.Close()))
+		return nil, publicErrorUnder(ctx, preferredCause(err, db.Close()))
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, publicError(preferredCause(err, db.Close()))
+		return nil, publicErrorUnder(ctx, preferredCause(err, db.Close()))
 	}
 	return db, nil
 }
@@ -147,14 +148,14 @@ func ProbeForeignKeys(ctx context.Context, base driver.Connector) (enforced bool
 		return false, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
-		return false, publicError(err)
+		return false, publicErrorUnder(ctx, err)
 	}
 	conn, err := base.Connect(ctx)
 	if err != nil {
 		if conn != nil {
-			return false, publicError(preferredCause(err, conn.Close()))
+			return false, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
 		}
-		return false, publicError(err)
+		return false, publicErrorUnder(ctx, err)
 	}
 	if conn == nil {
 		return false, ErrDriverFailed
@@ -163,17 +164,17 @@ func ProbeForeignKeys(ctx context.Context, base driver.Connector) (enforced bool
 
 	state, err := foreignKeyState(ctx, conn)
 	if err != nil {
-		return false, publicError(err)
+		return false, publicErrorUnder(ctx, err)
 	}
 	if state == 1 {
 		return true, nil
 	}
 	if err := establishForeignKeys(ctx, conn); err != nil {
-		return false, publicError(err)
+		return false, publicErrorUnder(ctx, err)
 	}
 	state, err = foreignKeyState(ctx, conn)
 	if err != nil {
-		return false, publicError(err)
+		return false, publicErrorUnder(ctx, err)
 	}
 	return state == 1, nil
 }

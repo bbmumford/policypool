@@ -77,33 +77,33 @@ func assertHidden(t *testing.T, err error, hidden ...string) {
 	}
 }
 
-// kindEntry opens scenario through one of the three redacted entries and
-// returns the error with the text that must not appear in it.
+// kindEntry opens scenario under ctx through one of the three redacted entries
+// and returns the error with the text that must not appear in it.
 type kindEntry struct {
 	name string
-	open func(*testing.T, *hostileScenario) (error, string)
+	open func(context.Context, *testing.T, *hostileScenario) (error, string)
 }
 
 var (
-	openEntry = kindEntry{name: "Open", open: func(t *testing.T, scenario *hostileScenario) (error, string) {
+	openEntry = kindEntry{name: "Open", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (error, string) {
 		name := registerHostileDriver(t, scenario)
-		db, err := Open(context.Background(), name, "dsn="+kindSecret, ForeignKeysRequired)
+		db, err := Open(ctx, name, "dsn="+kindSecret, ForeignKeysRequired)
 		if db != nil {
 			_ = db.Close()
 			t.Fatal("Open published a pool")
 		}
 		return err, name
 	}}
-	connectorEntry = kindEntry{name: "OpenConnector", open: func(t *testing.T, scenario *hostileScenario) (error, string) {
-		db, err := OpenConnector(context.Background(), &dsnConnector{base: scenario, dsn: "dsn=" + kindSecret}, ForeignKeysRequired)
+	connectorEntry = kindEntry{name: "OpenConnector", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (error, string) {
+		db, err := OpenConnector(ctx, &dsnConnector{base: scenario, dsn: "dsn=" + kindSecret}, ForeignKeysRequired)
 		if db != nil {
 			_ = db.Close()
 			t.Fatal("OpenConnector published a pool")
 		}
 		return err, ""
 	}}
-	probeEntry = kindEntry{name: "ProbeForeignKeys", open: func(t *testing.T, scenario *hostileScenario) (error, string) {
-		_, err := ProbeForeignKeys(context.Background(), &dsnConnector{base: scenario, dsn: "dsn=" + kindSecret})
+	probeEntry = kindEntry{name: "ProbeForeignKeys", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (error, string) {
+		_, err := ProbeForeignKeys(ctx, &dsnConnector{base: scenario, dsn: "dsn=" + kindSecret})
 		return err, ""
 	}}
 	everyEntry = []kindEntry{openEntry, connectorEntry, probeEntry}
@@ -126,7 +126,7 @@ func runKindCases(t *testing.T, want error, cases []kindCase) {
 		for _, entry := range entries {
 			t.Run(test.name+"/"+entry.name, func(t *testing.T) {
 				scenario := &hostileScenario{plans: []hostilePlan{test.plan}, openErr: test.openErr}
-				err, hidden := entry.open(t, scenario)
+				err, hidden := entry.open(context.Background(), t, scenario)
 				assertKind(t, err, want, hidden)
 			})
 		}
@@ -282,8 +282,9 @@ func TestRefusalsAreReportedAsPolicyRefused(t *testing.T) {
 }
 
 // TestCancellationAndBadConnectionKeepTheirIdentity pins the identities a
-// kind rides beside. A dial stopped by its context is a *net.OpError too, and
-// is reported as the context's error with no kind.
+// kind rides beside. A cancelled dial is a *net.OpError too, and is reported
+// as the cancellation with no kind. A dial stopped by a deadline is covered by
+// the timeout tests, since whose deadline it was decides its kind.
 func TestCancellationAndBadConnectionKeepTheirIdentity(t *testing.T) {
 	stoppedDial := func(cause error) error {
 		return &url.Error{Op: "Post", URL: "http://db.example/?" + kindSecret, Err: &net.OpError{Op: "dial", Net: "tcp", Err: cause}}
@@ -296,7 +297,6 @@ func TestCancellationAndBadConnectionKeepTheirIdentity(t *testing.T) {
 		kind     error
 	}{
 		{name: "canceled dial", openErr: stoppedDial(context.Canceled), identity: context.Canceled},
-		{name: "expired dial", openErr: stoppedDial(context.DeadlineExceeded), identity: context.DeadlineExceeded},
 		{name: "canceled query", plan: hostilePlan{queryErr: context.Canceled}, identity: context.Canceled},
 		{name: "bad connection", plan: hostilePlan{queryErr: driver.ErrBadConn}, identity: driver.ErrBadConn, kind: ErrDriverFailed},
 		{name: "bad connection over a reset transport", plan: hostilePlan{queryErr: errors.Join(driver.ErrBadConn,
@@ -306,7 +306,7 @@ func TestCancellationAndBadConnectionKeepTheirIdentity(t *testing.T) {
 		for _, entry := range everyEntry {
 			t.Run(test.name+"/"+entry.name, func(t *testing.T) {
 				scenario := &hostileScenario{plans: []hostilePlan{test.plan}, openErr: test.openErr}
-				err, hidden := entry.open(t, scenario)
+				err, hidden := entry.open(context.Background(), t, scenario)
 				if !errors.Is(err, test.identity) {
 					t.Fatalf("error %q lost %v", err, test.identity)
 				}

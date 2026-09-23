@@ -14,9 +14,12 @@ import (
 // data-source name, a server URL or a file path, and a data-source name can
 // hold an auth token or an encryption key, so the cause is read to choose the
 // kind and then dropped; no kind wraps or joins it. An error carries at most
-// one kind. driver.ErrBadConn keeps its errors.Is identity beside the kind, and
-// a cancelled or expired context keeps its own identity and carries no kind,
-// because the deadline is the caller's and says nothing about the server.
+// one kind. driver.ErrBadConn keeps its errors.Is identity beside the kind. A
+// timeout or cancellation under a caller's context that has ended keeps that
+// context's identity and carries no kind, because the caller's deadline says
+// nothing about the server. A deadline the driver set for itself, reached while
+// the caller's context is live, is not the caller's and does not carry its
+// identity.
 var (
 	// ErrPolicyRefused is policypool refusing the call itself: a nil context or
 	// connector, a policy other than ForeignKeysRequired, or, on a policy
@@ -35,10 +38,11 @@ var (
 	ErrPolicyUnproved = errors.New("policypool: connection policy not proved")
 
 	// ErrUnreachable is a database server that could not be reached: a dial,
-	// name lookup or network transfer failed, or the driver reported that it
-	// could not connect. A name that does not resolve is this kind too, so it
-	// does not say whether a database was deleted. A caller may retry, or read
-	// from a replica it already holds.
+	// name lookup or network transfer failed, including one the driver's own
+	// timeout stopped while the caller's context was live, or the driver
+	// reported that it could not connect. A name that does not resolve is this
+	// kind too, so it does not say whether a database was deleted. A caller may
+	// retry, or read from a replica it already holds.
 	ErrUnreachable = errors.New("policypool: database server unreachable")
 
 	// ErrUnauthorized is a database server that refused the credential, or a
@@ -129,25 +133,29 @@ var (
 // classify names the kind of a driver error, or returns nil when none applies.
 // It returns only a sentinel and keeps nothing of cause.
 //
-// WHAT CONSUMES IT: kindOf, for publicError and resetError.
+// WHAT CONSUMES IT: kindOf, for publicError and resetError, and
+// publicErrorUnder, which asks whether a driver's own timeout stopped a dial.
 //
 // CONDITIONS. Typed checks run first because they do not depend on wording.
 // A *net.OpError or *net.DNSError anywhere in the chain is ErrUnreachable:
 // libsql-client-go's dial failures reach the caller as a *url.Error whose text
-// holds the server's URL, with the *net.OpError inside it. The net.Error
-// interface alone is not enough, because *url.Error satisfies it whatever it
-// wraps, a refused TLS certificate included. An error with a Code() int method whose primary
-// code is SQLITE_NOTADB is ErrNotADatabase: modernc's *sqlite.Error is one, and
-// it surfaces at Ping on a file that is not a database. SQLITE_AUTH (23) maps to
-// nothing, because it is an authorizer callback denying a statement, not a
-// server refusing a credential. The text checks come last and are the only
-// signal from drivers that build their errors as text; a credential or file
-// message proves the server or file was reached, so both are tried before the
-// connect phrases.
+// holds the server's URL, with the *net.OpError inside it. The exception is
+// the *net.OpError crypto/tls returns for a TLS alert, whose Op is "remote
+// error" when the server sent the alert and "local error" when this side did:
+// the server was reached and the connection refused, so it is not this kind.
+// The net.Error interface alone is not enough either, because *url.Error
+// satisfies it whatever it wraps, a refused TLS certificate included. An error
+// with a Code() int method whose primary code is SQLITE_NOTADB is
+// ErrNotADatabase: modernc's *sqlite.Error is one, and it surfaces at Ping on
+// a file that is not a database. SQLITE_AUTH (23) maps to nothing, because it
+// is an authorizer callback denying a statement, not a server refusing a
+// credential. The text checks come last and are the only signal from drivers
+// that build their errors as text; a credential or file message proves the
+// server or file was reached, so both are tried before the connect phrases.
 func classify(cause error) error {
 	var dial *net.OpError
 	var lookup *net.DNSError
-	if errors.As(cause, &dial) || errors.As(cause, &lookup) {
+	if (errors.As(cause, &dial) && !isTLSAlert(dial)) || errors.As(cause, &lookup) {
 		return ErrUnreachable
 	}
 	var coded interface{ Code() int }
@@ -164,6 +172,12 @@ func classify(cause error) error {
 		return ErrUnreachable
 	}
 	return nil
+}
+
+// isTLSAlert reports whether err is the *net.OpError crypto/tls returns for a
+// TLS alert rather than a failed dial or transfer.
+func isTLSAlert(err *net.OpError) bool {
+	return err.Op == "remote error" || err.Op == "local error"
 }
 
 func containsAny(text string, phrases []string) bool {

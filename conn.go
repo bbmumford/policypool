@@ -14,26 +14,26 @@ type policyConnector struct {
 
 func (c *policyConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err := contextError(ctx); err != nil {
-		return nil, publicError(err)
+		return nil, publicErrorUnder(ctx, err)
 	}
 	conn, err := c.base.Connect(ctx)
 	if err != nil {
 		if conn != nil {
-			return nil, publicError(preferredCause(err, conn.Close()))
+			return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
 		}
-		return nil, publicError(err)
+		return nil, publicErrorUnder(ctx, err)
 	}
 	if conn == nil {
 		return nil, ErrDriverFailed
 	}
 	if err := contextError(ctx); err != nil {
-		return nil, publicError(preferredCause(err, conn.Close()))
+		return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
 	}
 	if err := enforce(ctx, conn, c.policy); err != nil {
-		return nil, publicError(preferredCause(err, conn.Close()))
+		return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
 	}
 	if err := contextError(ctx); err != nil {
-		return nil, publicError(preferredCause(err, conn.Close()))
+		return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
 	}
 	return &policyConn{Conn: conn, policy: c.policy}, nil
 }
