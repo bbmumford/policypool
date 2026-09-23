@@ -120,7 +120,7 @@ func TestPolicyConnectionRefusesEverySpellingThatTurnsForeignKeysOff(t *testing.
 				ctx := context.Background()
 				conn := pinnedModerncConnection(t)
 				err := entry.run(ctx, conn, query)
-				if !errors.Is(err, errPolicyRefused) {
+				if !errors.Is(err, ErrPolicyRefused) {
 					t.Fatalf("%q = %v, want a policy refusal", query, err)
 				}
 				if errors.Is(err, driver.ErrBadConn) {

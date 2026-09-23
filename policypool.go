@@ -32,12 +32,16 @@ const (
 // pool is returned. Policy is also established and proved on every later
 // physical connection created by the pool.
 //
-// Ordinary connection and policy errors are deliberately redacted because a
-// driver can include a data-source name or authentication material in them.
-// Cancellation and driver.ErrBadConn retain errors.Is identity.
+// Connection and policy errors are redacted because a driver can include a
+// data-source name or authentication material in them. What a caller gets
+// instead is one kind, told apart with errors.Is: ErrPolicyRefused,
+// ErrPolicyUnproved, ErrUnreachable, ErrUnauthorized, ErrNotADatabase or
+// ErrDriverFailed. No kind carries any of the driver's text. Cancellation and
+// driver.ErrBadConn retain errors.Is identity; a cancelled or expired open
+// carries no kind.
 func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) (*sql.DB, error) {
 	if ctx == nil || policy != ForeignKeysRequired {
-		return nil, errPolicyRefused
+		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, publicError(err)
@@ -53,7 +57,7 @@ func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) 
 	}
 	base, err := connectorFor(baseDriver, dsn)
 	if err != nil || base == nil {
-		return nil, publicError(preferredCause(err, errPolicyFailed))
+		return nil, publicError(preferredCause(err, ErrDriverFailed))
 	}
 
 	return openProved(ctx, base, policy)
@@ -86,7 +90,7 @@ func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) 
 // connection, and the replica stops advancing with nothing reporting it.
 func OpenConnector(ctx context.Context, base driver.Connector, policy ConnectionPolicy) (*sql.DB, error) {
 	if ctx == nil || policy != ForeignKeysRequired || base == nil {
-		return nil, errPolicyRefused
+		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, publicError(err)
@@ -133,9 +137,14 @@ func openProved(ctx context.Context, base driver.Connector, policy ConnectionPol
 // Open's per-connection proof. And "enforced" here means the engine REPORTED the
 // setting active — an engine that reports 1 and enforces nothing is outside what
 // any read-back can see, and only a rejected write proves the rest.
+//
+// Its errors are Open's kinds with the same redaction, so a boot that records
+// the answer can also record why there was none: ErrUnreachable,
+// ErrUnauthorized and ErrNotADatabase say the question never reached the
+// setting.
 func ProbeForeignKeys(ctx context.Context, base driver.Connector) (enforced bool, err error) {
 	if ctx == nil || base == nil {
-		return false, errPolicyRefused
+		return false, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
 		return false, publicError(err)
@@ -148,7 +157,7 @@ func ProbeForeignKeys(ctx context.Context, base driver.Connector) (enforced bool
 		return false, publicError(err)
 	}
 	if conn == nil {
-		return false, errPolicyFailed
+		return false, ErrDriverFailed
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -193,7 +202,7 @@ func (c *dsnConnector) Connect(ctx context.Context) (driver.Conn, error) {
 		return nil, err
 	}
 	if conn == nil {
-		return nil, errPolicyFailed
+		return nil, ErrDriverFailed
 	}
 	if err := contextError(ctx); err != nil {
 		return nil, preferredCause(err, conn.Close())

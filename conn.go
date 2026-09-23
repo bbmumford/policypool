@@ -24,7 +24,7 @@ func (c *policyConnector) Connect(ctx context.Context) (driver.Conn, error) {
 		return nil, publicError(err)
 	}
 	if conn == nil {
-		return nil, errPolicyFailed
+		return nil, ErrDriverFailed
 	}
 	if err := contextError(ctx); err != nil {
 		return nil, publicError(preferredCause(err, conn.Close()))
@@ -62,7 +62,7 @@ type policyConn struct {
 }
 
 // refuses reports whether query must not reach the physical connection. The
-// refusal is errPolicyRefused and never driver.ErrBadConn, so database/sql
+// refusal is ErrPolicyRefused and never driver.ErrBadConn, so database/sql
 // returns it to the caller instead of retrying the statement on another
 // connection, and it carries none of the statement text.
 func (c *policyConn) refuses(query string) bool {
@@ -76,7 +76,7 @@ func (c *policyConn) Close() error { return publicError(c.Conn.Close()) }
 // holding the driver connection through sql.Conn.Raw can call this one directly.
 func (c *policyConn) Prepare(query string) (driver.Stmt, error) {
 	if c.refuses(query) {
-		return nil, errPolicyRefused
+		return nil, ErrPolicyRefused
 	}
 	return c.Conn.Prepare(query)
 }
@@ -86,7 +86,7 @@ func (c *policyConn) PrepareContext(ctx context.Context, query string) (driver.S
 		return nil, err
 	}
 	if c.refuses(query) {
-		return nil, errPolicyRefused
+		return nil, ErrPolicyRefused
 	}
 	if contextual, ok := c.Conn.(driver.ConnPrepareContext); ok {
 		stmt, err := contextual.PrepareContext(ctx, query)
@@ -153,7 +153,7 @@ func (c *policyConn) ExecContext(ctx context.Context, query string, args []drive
 		return nil, err
 	}
 	if c.refuses(query) {
-		return nil, errPolicyRefused
+		return nil, ErrPolicyRefused
 	}
 	if contextual, ok := c.Conn.(driver.ExecerContext); ok {
 		result, err := contextual.ExecContext(ctx, query, args)
@@ -178,7 +178,7 @@ func (c *policyConn) QueryContext(ctx context.Context, query string, args []driv
 		return nil, err
 	}
 	if c.refuses(query) {
-		return nil, errPolicyRefused
+		return nil, ErrPolicyRefused
 	}
 	if contextual, ok := c.Conn.(driver.QueryerContext); ok {
 		rows, err := contextual.QueryContext(ctx, query, args)

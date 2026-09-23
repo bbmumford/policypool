@@ -92,7 +92,7 @@ func TestOpenConnectorRefusesWhatItCannotProve(t *testing.T) {
 			if db != nil {
 				_ = db.Close()
 			}
-			if !errors.Is(err, errPolicyRefused) {
+			if !errors.Is(err, ErrPolicyRefused) {
 				t.Fatalf("got %v, want a refusal — an unauthorized argument must not open a pool", err)
 			}
 		})
@@ -201,7 +201,7 @@ func TestTheProbeAndThePoolDisagreeOnTheSameEngine(t *testing.T) {
 // TestTheProbeRefusesWhatItCannotAsk keeps its arguments honest — a nil connector
 // answering false would read as "this engine does not enforce".
 func TestTheProbeRefusesWhatItCannotAsk(t *testing.T) {
-	if _, err := ProbeForeignKeys(context.Background(), nil); !errors.Is(err, errPolicyRefused) {
+	if _, err := ProbeForeignKeys(context.Background(), nil); !errors.Is(err, ErrPolicyRefused) {
 		t.Errorf("a nil connector returned %v; answering false would read as a measured result", err)
 	}
 }

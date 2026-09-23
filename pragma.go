@@ -9,7 +9,7 @@ import (
 
 func enforce(ctx context.Context, conn driver.Conn, policy ConnectionPolicy) error {
 	if policy != ForeignKeysRequired {
-		return errPolicyRefused
+		return ErrPolicyRefused
 	}
 	state, err := foreignKeyState(ctx, conn)
 	if err != nil {
@@ -19,7 +19,7 @@ func enforce(ctx context.Context, conn driver.Conn, policy ConnectionPolicy) err
 		return nil
 	}
 	if state != 0 {
-		return errPolicyFailed
+		return ErrPolicyUnproved
 	}
 	if err := establishForeignKeys(ctx, conn); err != nil {
 		return err
@@ -29,7 +29,7 @@ func enforce(ctx context.Context, conn driver.Conn, policy ConnectionPolicy) err
 		return err
 	}
 	if state != 1 {
-		return errPolicyFailed
+		return ErrPolicyUnproved
 	}
 	return nil
 }
@@ -41,7 +41,7 @@ func foreignKeyState(ctx context.Context, conn driver.Conn) (int64, error) {
 	}
 	columns := rows.Columns()
 	if len(columns) != 1 {
-		return 0, closeRows(ctx, rows, errPolicyFailed)
+		return 0, closeRows(ctx, rows, ErrPolicyUnproved)
 	}
 
 	dest := make([]driver.Value, 1)
@@ -50,13 +50,13 @@ func foreignKeyState(ctx context.Context, conn driver.Conn) (int64, error) {
 	}
 	if err := rows.Next(dest); err != nil {
 		if errors.Is(err, io.EOF) {
-			err = errPolicyFailed
+			err = ErrPolicyUnproved
 		}
 		return 0, closeRows(ctx, rows, err)
 	}
 	state, ok := dest[0].(int64)
 	if !ok || (state != 0 && state != 1) {
-		return 0, closeRows(ctx, rows, errPolicyFailed)
+		return 0, closeRows(ctx, rows, ErrPolicyUnproved)
 	}
 
 	if err := contextError(ctx); err != nil {
@@ -65,7 +65,7 @@ func foreignKeyState(ctx context.Context, conn driver.Conn) (int64, error) {
 	dest[0] = nil
 	err = rows.Next(dest)
 	if err == nil {
-		return 0, closeRows(ctx, rows, errPolicyFailed)
+		return 0, closeRows(ctx, rows, ErrPolicyUnproved)
 	}
 	if !errors.Is(err, io.EOF) {
 		return 0, closeRows(ctx, rows, err)
@@ -81,7 +81,7 @@ func establishForeignKeys(ctx context.Context, conn driver.Conn) error {
 	if contextual, ok := conn.(driver.ExecerContext); ok {
 		result, err := contextual.ExecContext(ctx, statement, nil)
 		if errors.Is(err, driver.ErrSkip) && result != nil {
-			return errPolicyFailed
+			return ErrDriverFailed
 		}
 		if !errors.Is(err, driver.ErrSkip) {
 			return withContext(ctx, err)
@@ -93,7 +93,7 @@ func establishForeignKeys(ctx context.Context, conn driver.Conn) error {
 		}
 		result, err := legacy.Exec(statement, nil)
 		if errors.Is(err, driver.ErrSkip) && result != nil {
-			return errPolicyFailed
+			return ErrDriverFailed
 		}
 		if !errors.Is(err, driver.ErrSkip) {
 			return withContext(ctx, err)
@@ -108,7 +108,7 @@ func establishForeignKeys(ctx context.Context, conn driver.Conn) error {
 		var result driver.Result
 		result, err = contextual.ExecContext(ctx, nil)
 		if errors.Is(err, driver.ErrSkip) && result != nil {
-			return preferredCause(errPolicyFailed, stmt.Close())
+			return preferredCause(ErrDriverFailed, stmt.Close())
 		}
 		if errors.Is(err, driver.ErrSkip) {
 			err = nil
@@ -129,7 +129,7 @@ func queryPolicy(ctx context.Context, conn driver.Conn, query string) (driver.Ro
 	if contextual, ok := conn.(driver.QueryerContext); ok {
 		rows, err := contextual.QueryContext(ctx, query, nil)
 		if errors.Is(err, driver.ErrSkip) && rows != nil {
-			return nil, preferredCause(errPolicyFailed, rows.Close())
+			return nil, preferredCause(ErrDriverFailed, rows.Close())
 		}
 		if !errors.Is(err, driver.ErrSkip) {
 			return checkedRows(ctx, rows, err)
@@ -141,7 +141,7 @@ func queryPolicy(ctx context.Context, conn driver.Conn, query string) (driver.Ro
 		}
 		rows, err := legacy.Query(query, nil)
 		if errors.Is(err, driver.ErrSkip) && rows != nil {
-			return nil, preferredCause(errPolicyFailed, rows.Close())
+			return nil, preferredCause(ErrDriverFailed, rows.Close())
 		}
 		if !errors.Is(err, driver.ErrSkip) {
 			return checkedRows(ctx, rows, err)
@@ -155,7 +155,7 @@ func queryPolicy(ctx context.Context, conn driver.Conn, query string) (driver.Ro
 	if contextual, ok := stmt.(driver.StmtQueryContext); ok {
 		rows, err := contextual.QueryContext(ctx, nil)
 		if errors.Is(err, driver.ErrSkip) && rows != nil {
-			return nil, preferredCause(errPolicyFailed, preferredCause(rows.Close(), stmt.Close()))
+			return nil, preferredCause(ErrDriverFailed, preferredCause(rows.Close(), stmt.Close()))
 		}
 		if !errors.Is(err, driver.ErrSkip) {
 			if err != nil || rows == nil {
@@ -181,18 +181,18 @@ func preparePolicy(ctx context.Context, conn driver.Conn, query string) (driver.
 	if contextual, ok := conn.(driver.ConnPrepareContext); ok {
 		stmt, err := contextual.PrepareContext(ctx, query)
 		if errors.Is(err, driver.ErrSkip) && stmt != nil {
-			return nil, preferredCause(errPolicyFailed, stmt.Close())
+			return nil, preferredCause(ErrDriverFailed, stmt.Close())
 		}
 		if !errors.Is(err, driver.ErrSkip) {
 			if err != nil || stmt == nil {
-				return nil, withContext(ctx, preferredCause(err, errPolicyFailed))
+				return nil, withContext(ctx, preferredCause(err, ErrDriverFailed))
 			}
 			return stmt, nil
 		}
 	}
 	stmt, err := conn.Prepare(query)
 	if err != nil || stmt == nil {
-		return nil, withContext(ctx, preferredCause(err, errPolicyFailed))
+		return nil, withContext(ctx, preferredCause(err, ErrDriverFailed))
 	}
 	if err := contextError(ctx); err != nil {
 		return nil, preferredCause(err, stmt.Close())
@@ -222,7 +222,7 @@ func checkedRows(ctx context.Context, rows driver.Rows, err error) (driver.Rows,
 		return nil, withContext(ctx, err)
 	}
 	if rows == nil {
-		return nil, errPolicyFailed
+		return nil, ErrDriverFailed
 	}
 	if err := contextError(ctx); err != nil {
 		return nil, preferredCause(err, rows.Close())
