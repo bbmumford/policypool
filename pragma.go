@@ -8,7 +8,7 @@ import (
 )
 
 func enforce(ctx context.Context, conn driver.Conn, policy ConnectionPolicy) error {
-	if policy != ForeignKeysRequired {
+	if !policy.defined() {
 		return ErrPolicyRefused
 	}
 	state, err := foreignKeyState(ctx, conn)

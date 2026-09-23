@@ -52,10 +52,12 @@ func (c *policyConnector) Close() error {
 // surface stays native. Standard optional interfaces are forwarded below.
 //
 // Every method that takes SQL text refuses a statement that turns foreign keys
-// off, before the driver sees any of it. The proof runs only in Connect and
-// ResetSession, and a connection a caller holds through sql.Conn or a
-// transaction is not reset until it returns to the pool, so without the refusal
-// that caller could write orphans between two proofs.
+// off, before the driver sees any of it. The proof runs only in Connect and,
+// under ForeignKeysRequired, in ResetSession, and a connection a caller holds
+// through sql.Conn or a transaction is not reset until it returns to the pool,
+// so without the refusal that caller could write orphans between two proofs.
+// Under ForeignKeysRequiredAtConnect there is no second proof, and the refusal
+// alone keeps the connection's setting on after Connect.
 type policyConn struct {
 	driver.Conn
 	policy ConnectionPolicy
@@ -66,7 +68,7 @@ type policyConn struct {
 // returns it to the caller instead of retrying the statement on another
 // connection, and it carries none of the statement text.
 func (c *policyConn) refuses(query string) bool {
-	return c.policy == ForeignKeysRequired && disablesForeignKeys(query)
+	return c.policy.defined() && disablesForeignKeys(query)
 }
 
 func (c *policyConn) Close() error { return publicError(c.Conn.Close()) }
@@ -198,6 +200,12 @@ func (c *policyConn) QueryContext(ctx context.Context, query string, args []driv
 	return rows, nil
 }
 
+// ResetSession runs each time database/sql hands a pooled connection out again.
+// The driver's own reset always runs, so a driver that reports its connection
+// unusable still has it discarded. Only ForeignKeysRequiredAtConnect skips the
+// re-proof after it; every other value is proved again, and a value enforce
+// does not define fails, so a policy this method does not name never loses its
+// proof by default.
 func (c *policyConn) ResetSession(ctx context.Context) error {
 	if err := contextError(ctx); err != nil {
 		return resetError(err)
@@ -206,6 +214,9 @@ func (c *policyConn) ResetSession(ctx context.Context) error {
 		if err := resetter.ResetSession(ctx); err != nil {
 			return resetError(err)
 		}
+	}
+	if c.policy == ForeignKeysRequiredAtConnect {
+		return nil
 	}
 	return resetError(enforce(ctx, c.Conn, c.policy))
 }

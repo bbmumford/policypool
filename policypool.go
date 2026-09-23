@@ -6,11 +6,13 @@
 // (turso.tech/database/tursogo) opens every connection with it OFF, so a PRAGMA
 // issued once through a *sql.DB reaches whichever connection ran it and leaves
 // every other connection the pool opens accepting orphans. The policy is
-// therefore established AND read back on every new physical connection and
-// again after every session reset, and a connection that cannot prove it is
-// refused with driver.ErrBadConn so database/sql discards it. Between those
-// proofs, a policy connection refuses any statement that would switch foreign
-// keys off, since a caller holding a connection is not reset until it returns.
+// therefore established AND read back on every new physical connection, and
+// under ForeignKeysRequired again after every session reset; a connection that
+// cannot prove it is refused with driver.ErrBadConn so database/sql discards
+// it. Between those proofs, a policy connection refuses any statement that
+// would switch foreign keys off, since a caller holding a connection is not
+// reset until it returns; under ForeignKeysRequiredAtConnect that refusal is
+// what holds the setting for the rest of the connection's life.
 package policypool
 
 import (
@@ -24,9 +26,43 @@ import (
 type ConnectionPolicy uint8
 
 const (
-	// ForeignKeysRequired requires SQLite foreign-key enforcement to be active.
+	// ForeignKeysRequired requires SQLite foreign-key enforcement to be active,
+	// proved on every new physical connection and again each time database/sql
+	// hands a pooled connection out (ResetSession). It is the policy for every
+	// pool whose connection can lose the setting without a statement the guard
+	// sees: a remote session the driver reopens under the same connection starts
+	// at the server's default, which this package cannot know.
 	ForeignKeysRequired ConnectionPolicy = iota + 1
+
+	// ForeignKeysRequiredAtConnect requires the same enforcement, proved on
+	// every new physical connection and not again when the connection is reused;
+	// a statement that would turn it off is refused on the connection for its
+	// whole life, as under ForeignKeysRequired.
+	//
+	// WHAT CONSUMES IT: a pool over a go-libsql embedded replica connector.
+	//
+	// CONDITIONS. Only a connector whose connection cannot lose the setting
+	// except by a statement may use it. An embedded replica's connection is one:
+	// its writes run on the primary under that connection's setting, a session
+	// the libSQL primary starts again begins with foreign keys on, and the
+	// guard refuses every statement that would turn them off. Every other pool
+	// uses ForeignKeysRequired.
+	//
+	// WHY IT EXISTS. go-libsql answers a replica's reads from the local file but
+	// sends PRAGMA foreign_keys to the primary, so ForeignKeysRequired's proof on
+	// each reuse costs every pooled statement a round trip to the primary and
+	// fails every pooled read while the primary is unreachable. A physical
+	// connection opened during an outage still fails its proof, so reads during
+	// an outage are served by connections proved before it.
+	ForeignKeysRequiredAtConnect
 )
+
+// defined reports whether p is a policy this package proves. Open,
+// OpenConnector and enforce refuse every other value, the zero value included,
+// so an unknown policy never opens a pool.
+func (p ConnectionPolicy) defined() bool {
+	return p == ForeignKeysRequired || p == ForeignKeysRequiredAtConnect
+}
 
 // Open opens a pool and proves policy on one physical connection before the
 // pool is returned. Policy is also established and proved on every later
@@ -41,7 +77,7 @@ const (
 // that reached ctx's deadline carries no kind, and a timeout the driver set for
 // itself that stopped a dial while ctx was live is ErrUnreachable.
 func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) (*sql.DB, error) {
-	if ctx == nil || policy != ForeignKeysRequired {
+	if ctx == nil || !policy.defined() {
 		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
@@ -90,7 +126,7 @@ func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) 
 // this call discards that handle. The pool then works, policy holds on every
 // connection, and the replica stops advancing with nothing reporting it.
 func OpenConnector(ctx context.Context, base driver.Connector, policy ConnectionPolicy) (*sql.DB, error) {
-	if ctx == nil || policy != ForeignKeysRequired || base == nil {
+	if ctx == nil || !policy.defined() || base == nil {
 		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {

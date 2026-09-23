@@ -124,7 +124,7 @@ func TestOpenRejectsUnprovedConnections(t *testing.T) {
 }
 
 func TestOpenRejectsInvalidPolicyAndRedactsOpenFailure(t *testing.T) {
-	for _, policy := range []ConnectionPolicy{0, 2, 255} {
+	for _, policy := range []ConnectionPolicy{0, ForeignKeysRequiredAtConnect + 1, 255} {
 		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
 			scenario := &hostileScenario{plans: []hostilePlan{{state: 1}}}
 			driverName := registerHostileDriver(t, scenario)

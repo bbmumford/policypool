@@ -22,8 +22,9 @@ import (
 // identity.
 var (
 	// ErrPolicyRefused is policypool refusing the call itself: a nil context or
-	// connector, a policy other than ForeignKeysRequired, or, on a policy
-	// connection, a statement that would turn foreign keys off. It is never
+	// connector, a policy other than ForeignKeysRequired or
+	// ForeignKeysRequiredAtConnect, or, on a policy connection under either, a
+	// statement that would turn foreign keys off. It is never
 	// driver.ErrBadConn, so database/sql returns a refused statement to its
 	// caller instead of retrying it on another connection. Retrying the same
 	// call cannot succeed.
