@@ -8,7 +8,9 @@
 // every other connection the pool opens accepting orphans. The policy is
 // therefore established AND read back on every new physical connection and
 // again after every session reset, and a connection that cannot prove it is
-// refused with driver.ErrBadConn so database/sql discards it.
+// refused with driver.ErrBadConn so database/sql discards it. Between those
+// proofs, a policy connection refuses any statement that would switch foreign
+// keys off, since a caller holding a connection is not reset until it returns.
 package policypool
 
 import (

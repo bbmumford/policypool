@@ -50,16 +50,43 @@ func (c *policyConnector) Close() error {
 
 // policyConn embeds the physical connection so the required driver.Conn
 // surface stays native. Standard optional interfaces are forwarded below.
+//
+// Every method that takes SQL text refuses a statement that turns foreign keys
+// off, before the driver sees any of it. The proof runs only in Connect and
+// ResetSession, and a connection a caller holds through sql.Conn or a
+// transaction is not reset until it returns to the pool, so without the refusal
+// that caller could write orphans between two proofs.
 type policyConn struct {
 	driver.Conn
 	policy ConnectionPolicy
 }
 
+// refuses reports whether query must not reach the physical connection. The
+// refusal is errPolicyRefused and never driver.ErrBadConn, so database/sql
+// returns it to the caller instead of retrying the statement on another
+// connection, and it carries none of the statement text.
+func (c *policyConn) refuses(query string) bool {
+	return c.policy == ForeignKeysRequired && disablesForeignKeys(query)
+}
+
 func (c *policyConn) Close() error { return publicError(c.Conn.Close()) }
+
+// Prepare is the legacy entry the embedded driver.Conn would otherwise promote
+// unguarded. database/sql calls PrepareContext instead, but a caller holding the
+// driver connection through sql.Conn.Raw can call this one directly.
+func (c *policyConn) Prepare(query string) (driver.Stmt, error) {
+	if c.refuses(query) {
+		return nil, errPolicyRefused
+	}
+	return c.Conn.Prepare(query)
+}
 
 func (c *policyConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
+	}
+	if c.refuses(query) {
+		return nil, errPolicyRefused
 	}
 	if contextual, ok := c.Conn.(driver.ConnPrepareContext); ok {
 		stmt, err := contextual.PrepareContext(ctx, query)
@@ -125,6 +152,9 @@ func (c *policyConn) ExecContext(ctx context.Context, query string, args []drive
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
+	if c.refuses(query) {
+		return nil, errPolicyRefused
+	}
 	if contextual, ok := c.Conn.(driver.ExecerContext); ok {
 		result, err := contextual.ExecContext(ctx, query, args)
 		return result, withContext(ctx, err)
@@ -146,6 +176,9 @@ func (c *policyConn) ExecContext(ctx context.Context, query string, args []drive
 func (c *policyConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
+	}
+	if c.refuses(query) {
+		return nil, errPolicyRefused
 	}
 	if contextual, ok := c.Conn.(driver.QueryerContext); ok {
 		rows, err := contextual.QueryContext(ctx, query, args)

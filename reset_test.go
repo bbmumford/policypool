@@ -22,7 +22,7 @@ func TestSessionResetRestoresForeignKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Conn: %v", err)
 	}
-	if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys=OFF"); err != nil {
+	if _, err := conn.ExecContext(context.Background(), hostileDrift); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	if err := conn.Close(); err != nil {
@@ -95,7 +95,7 @@ func TestSessionResetReenableFailureDiscardsPhysicalConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Conn: %v", err)
 		}
-		if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys=OFF"); err != nil {
+		if _, err := conn.ExecContext(context.Background(), hostileDrift); err != nil {
 			_ = conn.Close()
 			t.Fatalf("disable: %v", err)
 		}

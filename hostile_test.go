@@ -12,6 +12,13 @@ import (
 	"testing"
 )
 
+// hostileDrift turns a hostile connection's foreign keys off through a
+// statement the guard does not read as a pragma. It stands for an engine that
+// loses the setting by a path no statement text shows, which the session-reset
+// tests need at checkout: the guard refuses every pragma spelling that would
+// put a connection there.
+const hostileDrift = "HOSTILE DRIFT"
+
 type hostileScenario struct {
 	mu      sync.Mutex
 	plans   []hostilePlan
@@ -168,7 +175,7 @@ func (c *hostileConn) ExecContext(ctx context.Context, query string, _ []driver.
 			c.state = 1
 		}
 		return driver.RowsAffected(0), nil
-	case "PRAGMA foreign_keys=OFF":
+	case hostileDrift:
 		c.state = 0
 		return driver.RowsAffected(0), nil
 	default:
