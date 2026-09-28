@@ -56,9 +56,11 @@ var (
 	// the key it was given. That includes a file encrypted under another key or
 	// opened without its key: go-libsql reports a wrong local key as "file is
 	// not a database", and tursogo's decryption failure is read as this kind so
-	// that both engines report the same condition the same way. A replica that
-	// can be synced again may be deleted on this kind; a file that is the only
-	// copy of its data must not be.
+	// that both engines report the same condition the same way. It includes a
+	// file shorter than one page opened under a key, which tursogo reports as
+	// a short read of page 1 where the same file opened without a key reads as
+	// "not a database". A replica that can be synced again may be deleted on
+	// this kind; a file that is the only copy of its data must not be.
 	ErrNotADatabase = errors.New("policypool: file is not a readable database")
 
 	// ErrDriverFailed is every other failure: an unregistered driver name, a
@@ -106,8 +108,11 @@ const sqliteNotADatabase = 26
 // PermissionDenied ... Not authorized to execute query"), a server it could not
 // connect to ("error trying to connect", "status: Unavailable") and a file
 // under the wrong key ("file is not a database"); tursogo for a file that is
-// not a database ("not a database") or is under the wrong key ("Decryption
-// failed").
+// not a database ("not a database"), is under the wrong key ("Decryption
+// failed") or is shorter than one page under a key ("short read on page 1:").
+// The colon ends the page number, so a short read of a later page, which
+// comes after page 1 decrypted and so is a damaged database rather than a
+// file that is not one, matches nothing.
 //
 // "not authorized" alone is deliberately absent: it is the whole message of
 // SQLite's own authorizer denial, which is a statement refused, not a
@@ -124,6 +129,7 @@ var (
 	notADatabaseText = [...]string{
 		"not a database",
 		"decryption failed",
+		"short read on page 1:",
 	}
 	unreachableText = [...]string{
 		"error trying to connect",

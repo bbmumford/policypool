@@ -168,6 +168,7 @@ func TestUnreadableFilesAreReportedAsNotADatabase(t *testing.T) {
 	runKindCases(t, ErrNotADatabase, []kindCase{
 		{name: "tursogo not a database", plan: hostilePlan{queryErr: errors.New("turso: not a database: file is not a database")}},
 		{name: "tursogo wrong key", plan: hostilePlan{queryErr: errors.New("turso: error: Decryption failed for page=1")}},
+		{name: "tursogo keyed file shorter than a page", plan: hostilePlan{queryErr: errors.New("turso: error: I/O error: short read on page 1: expected 512 bytes, got 28")}},
 		{name: "go-libsql wrong local key", openErr: fmt.Errorf("read the schema of /var/SECRET/local.db with the key applied: %w", errors.New(
 			"failed to execute query SELECT count(*) FROM sqlite_schema\nerror code = 1: Error executing statement: SQLite failure: `file is not a database`"))},
 		{name: "result code alone", plan: hostilePlan{queryErr: &engineError{code: sqliteNotADatabase, text: kindSecret}}},
@@ -226,6 +227,10 @@ func TestUnclassifiedFailuresAreReportedAsDriverFailed(t *testing.T) {
 		// SQLITE_AUTH is the engine's authorizer denying a statement.
 		{name: "authorizer denial", plan: hostilePlan{queryErr: &engineError{code: 23, text: "not authorized"}}},
 		{name: "authorizer result text", plan: hostilePlan{queryErr: &engineError{code: 23, text: "authorization denied"}}},
+		// A short read past page 1 comes after page 1 decrypted under the key,
+		// so the file is a damaged database, not one that is not a database.
+		{name: "tursogo short read of a later page", plan: hostilePlan{queryErr: errors.New("turso: error: I/O error: short read on page 12: expected 4096 bytes, got 100")}},
+		{name: "tursogo short read of page 10", plan: hostilePlan{queryErr: errors.New("turso: error: I/O error: short read on page 10: expected 4096 bytes, got 100")}},
 	})
 
 	unknown := "unregistered-" + kindSecret
