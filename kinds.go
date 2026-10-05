@@ -57,10 +57,12 @@ var (
 	// opened without its key: go-libsql reports a wrong local key as "file is
 	// not a database", and tursogo's decryption failure is read as this kind so
 	// that both engines report the same condition the same way. It includes a
-	// file shorter than one page opened under a key, which tursogo reports as
-	// a short read of page 1 where the same file opened without a key reads as
-	// "not a database". A replica that can be synced again may be deleted on
-	// this kind; a file that is the only copy of its data must not be.
+	// file too short to hold page 1, which tursogo reports as a short read of
+	// that page with or without a key: under a key no byte of page 1 can be
+	// decrypted, so a file truncated inside it cannot be told from one that was
+	// never a database, and the same text with no key reaches this kind too. A
+	// replica that can be synced again may be deleted on this kind; a file that
+	// is the only copy of its data must not be.
 	ErrNotADatabase = errors.New("policypool: file is not a readable database")
 
 	// ErrDriverFailed is every other failure: an unregistered driver name, a
@@ -109,10 +111,10 @@ const sqliteNotADatabase = 26
 // connect to ("error trying to connect", "status: Unavailable") and a file
 // under the wrong key ("file is not a database"); tursogo for a file that is
 // not a database ("not a database"), is under the wrong key ("Decryption
-// failed") or is shorter than one page under a key ("short read on page 1:").
-// The colon ends the page number, so a short read of a later page, which
-// comes after page 1 decrypted and so is a damaged database rather than a
-// file that is not one, matches nothing.
+// failed") or is too short to hold page 1 ("short read on page 1:", which it
+// gives with or without a key). The colon ends the page number, so a short
+// read of a later page, whose page 1 read whole and which is therefore a
+// damaged database rather than a file that is not one, matches nothing.
 //
 // "not authorized" alone is deliberately absent: it is the whole message of
 // SQLite's own authorizer denial, which is a statement refused, not a
