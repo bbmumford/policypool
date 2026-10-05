@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -144,6 +145,11 @@ func TestUnreachableServersAreReportedAsUnreachable(t *testing.T) {
 			"failed to execute query PRAGMA foreign_keys\nerror code = 1: Error executing statement: Hrana: `http error: `error trying to connect: dns error: failed to lookup address information: nodename nor servname provided, or not known``")}},
 		{name: "go-libsql replica write delegation", plan: hostilePlan{queryErr: secretCause(
 			"failed to execute query PRAGMA foreign_keys\nerror code = 1: Error executing statement: Write delegation: `status: Unavailable, message: \"error trying to connect: tcp connect error: Connection refused (os error 61)\"`")}},
+		// A dial that runs out of descriptors is a *net.OpError like any other
+		// failed dial, so classify's typed check answers before the text reaches
+		// the phrase lists: the server was not reached.
+		{name: "dial out of descriptors", openErr: &url.Error{Op: "Post", URL: "http://db.example/?" + kindSecret,
+			Err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("socket", syscall.EMFILE)}}},
 	})
 }
 
@@ -231,6 +237,14 @@ func TestUnclassifiedFailuresAreReportedAsDriverFailed(t *testing.T) {
 		// so the file is a damaged database, not one that is not a database.
 		{name: "tursogo short read of a later page", plan: hostilePlan{queryErr: errors.New("turso: error: I/O error: short read on page 12: expected 4096 bytes, got 100")}},
 		{name: "tursogo short read of page 10", plan: hostilePlan{queryErr: errors.New("turso: error: I/O error: short read on page 10: expected 4096 bytes, got 100")}},
+		// A process out of file descriptors says nothing about what the store
+		// file holds, so it must not reach ErrNotADatabase, the one kind whose
+		// contract lets a caller delete the file. It carries no phrase of any
+		// list and no result code, at open and when a query raises it.
+		{name: "local file out of descriptors", openErr: &fs.PathError{Op: "open",
+			Path: "/var/SECRET/local.db?" + kindSecret, Err: syscall.EMFILE}},
+		{name: "query out of descriptors", plan: hostilePlan{queryErr: secretCause(
+			"failed to execute query PRAGMA foreign_keys: open /var/local.db: too many open files")}},
 	})
 
 	unknown := "unregistered-" + kindSecret
