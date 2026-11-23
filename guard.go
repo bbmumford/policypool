@@ -36,11 +36,45 @@ func disablesForeignKeys(query string) bool {
 	if !containsFoldASCII(query, "pragma") || !containsFoldASCII(query, "foreign_keys") {
 		return false
 	}
+	return anyStatement(query, assignsForeignKeysOff)
+}
+
+// assignsIdentity reports whether query holds a statement that assigns
+// application_id or user_version, the header fields a file's kind and format
+// generation live in.
+//
+// WHAT CONSUMES IT: policyConn's refusal on a pool opened with an Identity, so
+// no caller of that pool changes what its file says it is. The pool's own
+// stamp at open and AdvanceGeneration run with the refusal lifted on the one
+// connection they hold.
+//
+// CONDITIONS. Statements are read as disablesForeignKeys reads them. After an
+// optional EXPLAIN or EXPLAIN QUERY PLAN, PRAGMA [schema.]application_id or
+// PRAGMA [schema.]user_version followed by anything at all is an assignment,
+// whatever its value; the bare pragma is a read and passes. The engine applies
+// a header assignment when the statement compiles, as it does foreign_keys, so
+// the Prepare entries refuse it too.
+func assignsIdentity(query string) bool {
+	if !containsFoldASCII(query, "pragma") ||
+		!containsFoldASCII(query, "application_id") && !containsFoldASCII(query, "user_version") {
+		return false
+	}
+	return anyStatement(query, func(statement []sqlToken) bool {
+		name, value, ok := pragmaOf(statement)
+		return ok && len(value) > 0 &&
+			(equalFoldASCII(name.text, "application_id") || equalFoldASCII(name.text, "user_version"))
+	})
+}
+
+// anyStatement reports whether match holds for any statement of query, each
+// handed over without its terminating semicolon, because a driver that takes a
+// multi-statement string runs every one.
+func anyStatement(query string, match func([]sqlToken) bool) bool {
 	var statement []sqlToken
 	for rest := query; ; {
 		token, next, ok := nextSQLToken(rest)
 		if !ok || (token.kind == tokenPunct && token.text == ";") {
-			if assignsForeignKeysOff(statement) {
+			if match(statement) {
 				return true
 			}
 			if !ok {
@@ -54,10 +88,10 @@ func disablesForeignKeys(query string) bool {
 	}
 }
 
-// assignsForeignKeysOff reads one statement's tokens, without the terminating
-// semicolon, and reports whether it assigns foreign_keys a value that is not
-// on. A statement that is not a foreign_keys pragma reports false.
-func assignsForeignKeysOff(statement []sqlToken) bool {
+// pragmaOf reads one statement as a pragma, after an optional EXPLAIN or
+// EXPLAIN QUERY PLAN: its name with any schema prefix dropped, and every token
+// after the name. ok is false for a statement that is not a pragma.
+func pragmaOf(statement []sqlToken) (name sqlToken, value []sqlToken, ok bool) {
 	i := 0
 	if i < len(statement) && statement[i].isKeyword("EXPLAIN") {
 		i++
@@ -66,26 +100,33 @@ func assignsForeignKeysOff(statement []sqlToken) bool {
 		}
 	}
 	if i >= len(statement) || !statement[i].isKeyword("PRAGMA") {
-		return false
+		return sqlToken{}, nil, false
 	}
 	i++
 	if i >= len(statement) || !statement[i].isName() {
-		return false
+		return sqlToken{}, nil, false
 	}
-	name := statement[i]
+	name = statement[i]
 	i++
 	if i < len(statement) && statement[i].isPunct(".") {
 		i++
 		if i >= len(statement) || !statement[i].isName() {
-			return false
+			return sqlToken{}, nil, false
 		}
 		name = statement[i]
 		i++
 	}
-	if !equalFoldASCII(name.text, "foreign_keys") {
+	return name, statement[i:], true
+}
+
+// assignsForeignKeysOff reads one statement's tokens, without the terminating
+// semicolon, and reports whether it assigns foreign_keys a value that is not
+// on. A statement that is not a foreign_keys pragma reports false.
+func assignsForeignKeysOff(statement []sqlToken) bool {
+	name, value, ok := pragmaOf(statement)
+	if !ok || !equalFoldASCII(name.text, "foreign_keys") {
 		return false
 	}
-	value := statement[i:]
 	switch {
 	case len(value) == 0:
 		return false

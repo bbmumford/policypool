@@ -10,6 +10,9 @@ import (
 type policyConnector struct {
 	base   driver.Connector
 	policy ConnectionPolicy
+	// identity is set on a pool opened with OpenFile or OpenFileConnector,
+	// and makes every connection it opens refuse header assignments.
+	identity *Identity
 }
 
 func (c *policyConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -35,7 +38,7 @@ func (c *policyConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
 	}
-	return &policyConn{Conn: conn, policy: c.policy}, nil
+	return &policyConn{Conn: conn, policy: c.policy, identity: c.identity}, nil
 }
 
 func (c *policyConnector) Driver() driver.Driver { return c.base.Driver() }
@@ -61,14 +64,24 @@ func (c *policyConnector) Close() error {
 type policyConn struct {
 	driver.Conn
 	policy ConnectionPolicy
+	// identity is the pool's Identity, nil on a pool opened without one.
+	identity *Identity
+	// stamping lifts the header-assignment refusal while this package itself
+	// stamps the header (withStamping), on a connection it holds alone.
+	stamping bool
 }
 
 // refuses reports whether query must not reach the physical connection. The
 // refusal is ErrPolicyRefused and never driver.ErrBadConn, so database/sql
 // returns it to the caller instead of retrying the statement on another
 // connection, and it carries none of the statement text.
+//
+// On a pool opened with an Identity it also refuses a statement assigning
+// application_id or user_version, so the file's kind and format generation
+// change only through this package's stamp and AdvanceGeneration.
 func (c *policyConn) refuses(query string) bool {
-	return c.policy.defined() && disablesForeignKeys(query)
+	return c.policy.defined() && (disablesForeignKeys(query) ||
+		c.identity != nil && !c.stamping && assignsIdentity(query))
 }
 
 func (c *policyConn) Close() error { return publicError(c.Conn.Close()) }

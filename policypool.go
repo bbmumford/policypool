@@ -77,7 +77,12 @@ func (p ConnectionPolicy) defined() bool {
 // that reached ctx's deadline carries no kind, and a timeout the driver set for
 // itself that stopped a dial while ctx was live is ErrUnreachable.
 func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) (*sql.DB, error) {
-	if ctx == nil || !policy.defined() {
+	return openNamed(ctx, driverName, dsn, policy, nil)
+}
+
+// openNamed is Open and OpenFile: identity is nil for Open.
+func openNamed(ctx context.Context, driverName, dsn string, policy ConnectionPolicy, identity *Identity) (*sql.DB, error) {
+	if ctx == nil || !policy.defined() || identity != nil && !identity.valid() {
 		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
@@ -97,7 +102,7 @@ func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) 
 		return nil, publicErrorUnder(ctx, preferredCause(err, ErrDriverFailed))
 	}
 
-	return openProved(ctx, base, policy)
+	return openProved(ctx, base, policy, identity)
 }
 
 // OpenConnector is Open for a caller that must build its own connector, and
@@ -126,23 +131,36 @@ func Open(ctx context.Context, driverName, dsn string, policy ConnectionPolicy) 
 // this call discards that handle. The pool then works, policy holds on every
 // connection, and the replica stops advancing with nothing reporting it.
 func OpenConnector(ctx context.Context, base driver.Connector, policy ConnectionPolicy) (*sql.DB, error) {
-	if ctx == nil || !policy.defined() || base == nil {
+	return openConnector(ctx, base, policy, nil)
+}
+
+// openConnector is OpenConnector and OpenFileConnector: identity is nil for
+// OpenConnector.
+func openConnector(ctx context.Context, base driver.Connector, policy ConnectionPolicy, identity *Identity) (*sql.DB, error) {
+	if ctx == nil || !policy.defined() || base == nil || identity != nil && !identity.valid() {
 		return nil, ErrPolicyRefused
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, publicErrorUnder(ctx, err)
 	}
-	return openProved(ctx, base, policy)
+	return openProved(ctx, base, policy, identity)
 }
 
 // openProved publishes the pool only after policy holds on a real connection.
 // The Ping is what forces one open, so a pool whose first physical connection
 // cannot satisfy policy is never returned to a caller that would then discover
-// it on a query.
-func openProved(ctx context.Context, base driver.Connector, policy ConnectionPolicy) (*sql.DB, error) {
-	db := sql.OpenDB(&policyConnector{base: base, policy: policy})
+// it on a query. With an identity, the file's header is proved next, on the
+// same terms: a pool whose file is not what identity names is never returned.
+func openProved(ctx context.Context, base driver.Connector, policy ConnectionPolicy, identity *Identity) (*sql.DB, error) {
+	db := sql.OpenDB(&policyConnector{base: base, policy: policy, identity: identity})
 	if err := db.PingContext(ctx); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, db.Close()))
+	}
+	if identity != nil {
+		if err := proveIdentity(ctx, db, *identity); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, db.Close()))
