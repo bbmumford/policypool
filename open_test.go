@@ -241,7 +241,11 @@ func TestEveryPhysicalConnectionIsVerifiedBeforeUse(t *testing.T) {
 		wg.Add(1)
 		go func(i int, conn *sql.Conn) {
 			defer wg.Done()
-			defer conn.Close()
+			defer func() {
+				if err := conn.Close(); err != nil {
+					t.Errorf("conn.Close: %v", err)
+				}
+			}()
 			if _, err := conn.ExecContext(context.Background(), "WORK", i); err != nil {
 				t.Errorf("connection %d use: %v", i, err)
 			}
@@ -288,12 +292,20 @@ func TestModerncTwoPhysicalConnectionsRejectOrphans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Conn: %v", err)
 	}
-	defer first.Close()
+	defer func() {
+		if err := first.Close(); err != nil {
+			t.Errorf("first.Close: %v", err)
+		}
+	}()
 	second, err := db.Conn(context.Background())
 	if err != nil {
 		t.Fatalf("second Conn: %v", err)
 	}
-	defer second.Close()
+	defer func() {
+		if err := second.Close(); err != nil {
+			t.Errorf("second.Close: %v", err)
+		}
+	}()
 
 	for i, conn := range []*sql.Conn{first, second} {
 		var enabled int64

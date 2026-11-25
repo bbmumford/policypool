@@ -234,7 +234,11 @@ func TestConnectOnlyPolicyRefusesAnUnprovedConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("first Conn: %v", err)
 		}
-		defer first.Close()
+		defer func() {
+			if err := first.Close(); err != nil {
+				t.Errorf("first.Close: %v", err)
+			}
+		}()
 		second, err := db.Conn(context.Background())
 		if second != nil {
 			_ = second.Close()
@@ -298,7 +302,11 @@ func TestUndefinedPoliciesAreRefused(t *testing.T) {
 			if err != nil {
 				t.Fatalf("raw open: %v", err)
 			}
-			defer raw.Close()
+			defer func() {
+				if err := raw.Close(); err != nil {
+					t.Errorf("raw.Close: %v", err)
+				}
+			}()
 			if err := enforce(context.Background(), raw, policy); !errors.Is(err, ErrPolicyRefused) {
 				t.Fatalf("enforce = %v, want ErrPolicyRefused", err)
 			}

@@ -116,7 +116,7 @@ func TestADriversOwnTimeoutIsUnreachable(t *testing.T) {
 	} {
 		for _, entry := range everyEntry {
 			t.Run(cause.name+"/"+entry.name, func(t *testing.T) {
-				err, hidden := entry.open(context.Background(), t, &hostileScenario{openErr: cause.err})
+				hidden, err := entry.open(context.Background(), t, &hostileScenario{openErr: cause.err})
 				assertKind(t, err, ErrUnreachable, hidden)
 				if errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("error %q claims the caller's deadline", err)
@@ -129,7 +129,7 @@ func TestADriversOwnTimeoutIsUnreachable(t *testing.T) {
 	for _, entry := range everyEntry {
 		t.Run("bare deadline/"+entry.name, func(t *testing.T) {
 			scenario := &hostileScenario{plans: []hostilePlan{{queryErr: context.DeadlineExceeded}}}
-			err, hidden := entry.open(context.Background(), t, scenario)
+			hidden, err := entry.open(context.Background(), t, scenario)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error %q lost context.DeadlineExceeded", err)
 			}
@@ -164,7 +164,7 @@ func TestATimeoutUnderTheCallersEndedContextCarriesNoKind(t *testing.T) {
 			t.Run(test.name+"/"+entry.name, func(t *testing.T) {
 				ctx := newEndingContext(test.ended)
 				scenario := &hostileScenario{openErr: test.cause, onOpen: func(int) { ctx.end() }}
-				err, hidden := entry.open(ctx, t, scenario)
+				hidden, err := entry.open(ctx, t, scenario)
 				assertReachedOnce(t, scenario)
 				if !errors.Is(err, test.ended) {
 					t.Fatalf("error %q lost the caller's %v", err, test.ended)
@@ -177,7 +177,7 @@ func TestATimeoutUnderTheCallersEndedContextCarriesNoKind(t *testing.T) {
 	for _, entry := range everyEntry {
 		t.Run("socket timeout before the deadline is marked/"+entry.name, func(t *testing.T) {
 			scenario := &hostileScenario{openErr: socketTimeout()}
-			err, hidden := entry.open(pastDeadlineContext{context.Background()}, t, scenario)
+			hidden, err := entry.open(pastDeadlineContext{context.Background()}, t, scenario)
 			assertReachedOnce(t, scenario)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error %q lost the caller's deadline", err)
@@ -189,7 +189,7 @@ func TestATimeoutUnderTheCallersEndedContextCarriesNoKind(t *testing.T) {
 		t.Run("refused dial/"+entry.name, func(t *testing.T) {
 			ctx := newEndingContext(context.DeadlineExceeded)
 			scenario := &hostileScenario{openErr: dialRefused("db.example"), onOpen: func(int) { ctx.end() }}
-			err, hidden := entry.open(ctx, t, scenario)
+			hidden, err := entry.open(ctx, t, scenario)
 			assertReachedOnce(t, scenario)
 			assertKind(t, err, ErrUnreachable, hidden)
 		})
@@ -236,7 +236,7 @@ func TestAPingFailureIsClassifiedUnderTheCallersContext(t *testing.T) {
 	for _, entry := range pools {
 		t.Run("driver timeout under a live context/"+entry.name, func(t *testing.T) {
 			scenario := &hostileScenario{plans: []hostilePlan{{state: 1, pingErr: driverDialTimeout(t)}}}
-			err, hidden := entry.open(context.Background(), t, scenario)
+			hidden, err := entry.open(context.Background(), t, scenario)
 			assertKind(t, err, ErrUnreachable, hidden)
 			if errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error %q claims the caller's deadline", err)
@@ -244,7 +244,7 @@ func TestAPingFailureIsClassifiedUnderTheCallersContext(t *testing.T) {
 		})
 		t.Run("socket timeout past the caller's deadline/"+entry.name, func(t *testing.T) {
 			scenario := &hostileScenario{plans: []hostilePlan{{state: 1, pingErr: socketTimeout()}}}
-			err, hidden := entry.open(pastDeadlineContext{context.Background()}, t, scenario)
+			hidden, err := entry.open(pastDeadlineContext{context.Background()}, t, scenario)
 			assertReachedOnce(t, scenario)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error %q lost the caller's deadline", err)

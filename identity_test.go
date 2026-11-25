@@ -31,7 +31,11 @@ func plainFile(t *testing.T, path string, app, version int64, statements ...stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	}()
 	all := append(statements, fmt.Sprintf("PRAGMA application_id = %d", app), fmt.Sprintf("PRAGMA user_version = %d", version))
 	for _, s := range all {
 		if _, err := db.Exec(s); err != nil {
@@ -188,7 +192,11 @@ func TestOpenLeavesHeaderAssignmentsToItsCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("db.Close: %v", err)
+		}
+	}()
 	for _, s := range []string{"PRAGMA user_version = 5", "PRAGMA application_id = 1"} {
 		if _, err := db.Exec(s); err != nil {
 			t.Fatalf("Exec(%q) on a pool without an Identity: %v", s, err)
@@ -251,7 +259,11 @@ func TestAdvanceGenerationMovesTheFormatWithItsMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer plain.Close()
+	defer func() {
+		if err := plain.Close(); err != nil {
+			t.Errorf("plain.Close: %v", err)
+		}
+	}()
 	if err := AdvanceGeneration(ctx, plain, 2, func(context.Context, *sql.Tx) error { return nil }); !errors.Is(err, ErrPolicyRefused) {
 		t.Fatalf("AdvanceGeneration on a pool without an Identity = %v", err)
 	}

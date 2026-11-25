@@ -87,7 +87,7 @@ func establishForeignKeys(ctx context.Context, conn driver.Conn) error {
 			return withContext(ctx, err)
 		}
 	}
-	if legacy, ok := conn.(driver.Execer); ok {
+	if legacy, ok := conn.(driver.Execer); ok { //nolint:staticcheck // a driver without ExecerContext may still offer Execer, as database/sql allows.
 		if err := contextError(ctx); err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func establishForeignKeys(ctx context.Context, conn driver.Conn) error {
 		if err := contextError(ctx); err != nil {
 			return preferredCause(err, stmt.Close())
 		}
-		_, err = stmt.Exec(nil)
+		_, err = stmt.Exec(nil) //nolint:staticcheck // a statement without StmtExecContext runs only through Exec, as database/sql allows.
 	}
 	return preferredCause(withContext(ctx, err), stmt.Close())
 }
@@ -135,7 +135,7 @@ func queryPolicy(ctx context.Context, conn driver.Conn, query string) (driver.Ro
 			return checkedRows(ctx, rows, err)
 		}
 	}
-	if legacy, ok := conn.(driver.Queryer); ok {
+	if legacy, ok := conn.(driver.Queryer); ok { //nolint:staticcheck // a driver without QueryerContext may still offer Queryer, as database/sql allows.
 		if err := contextError(ctx); err != nil {
 			return nil, err
 		}
@@ -167,7 +167,7 @@ func queryPolicy(ctx context.Context, conn driver.Conn, query string) (driver.Ro
 	if err := contextError(ctx); err != nil {
 		return nil, preferredCause(err, stmt.Close())
 	}
-	rows, err := stmt.Query(nil)
+	rows, err := stmt.Query(nil) //nolint:staticcheck // a statement without StmtQueryContext runs only through Query, as database/sql allows.
 	if err != nil || rows == nil {
 		return nil, preferredCause(withContext(ctx, err), stmt.Close())
 	}

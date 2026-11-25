@@ -77,6 +77,12 @@ func OpenFileConnector(ctx context.Context, base driver.Connector, policy Connec
 	return openConnector(ctx, base, policy, &identity)
 }
 
+// releaseConn is the deferred Close of the one connection proveIdentity and
+// AdvanceGeneration each take from the pool. Close only hands the connection
+// back to the pool, and its one error, sql.ErrConnDone, means it is back
+// already; the caller acts on the check's own result, so Close's is dropped.
+func releaseConn(conn *sql.Conn) { _ = conn.Close() }
+
 // proveIdentity checks the pool's file against identity on one connection,
 // stamping a new file. Engine failures keep the package's redaction; a header
 // refusal is ErrFileIdentity.
@@ -85,7 +91,7 @@ func proveIdentity(ctx context.Context, db *sql.DB, identity Identity) error {
 	if err != nil {
 		return publicErrorUnder(ctx, err)
 	}
-	defer conn.Close()
+	defer releaseConn(conn)
 	h, err := filekind.Check(ctx, conn, identity.want())
 	if err != nil && h == (filekind.Header{}) && errors.Is(err, filekind.ErrUnstamped) {
 		err = withStamping(conn, func() error {
@@ -116,7 +122,7 @@ func AdvanceGeneration(ctx context.Context, db *sql.DB, generation int32, migrat
 	if err != nil {
 		return publicErrorUnder(ctx, err)
 	}
-	defer conn.Close()
+	defer releaseConn(conn)
 	var identity *Identity
 	if err := conn.Raw(func(dc any) error {
 		pc, ok := dc.(*policyConn)

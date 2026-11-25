@@ -143,7 +143,7 @@ func (c *policyConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver
 	if opts.ReadOnly {
 		return nil, errReadOnlyUnsupported
 	}
-	tx, err := c.Conn.Begin()
+	tx, err := c.Conn.Begin() //nolint:staticcheck // a driver without ConnBeginTx begins only through Begin; database/sql falls back to it the same way.
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (c *policyConn) ExecContext(ctx context.Context, query string, args []drive
 		result, err := contextual.ExecContext(ctx, query, args)
 		return result, withContext(ctx, err)
 	}
-	legacy, ok := c.Conn.(driver.Execer)
+	legacy, ok := c.Conn.(driver.Execer) //nolint:staticcheck // a wrapped driver without ExecerContext may still offer Execer, which database/sql also falls back to.
 	if !ok || hasNamedValue(args) {
 		return nil, driver.ErrSkip
 	}
@@ -199,7 +199,7 @@ func (c *policyConn) QueryContext(ctx context.Context, query string, args []driv
 		rows, err := contextual.QueryContext(ctx, query, args)
 		return checkedRows(ctx, rows, err)
 	}
-	legacy, ok := c.Conn.(driver.Queryer)
+	legacy, ok := c.Conn.(driver.Queryer) //nolint:staticcheck // a wrapped driver without QueryerContext may still offer Queryer, which database/sql also falls back to.
 	if !ok || hasNamedValue(args) {
 		return nil, driver.ErrSkip
 	}

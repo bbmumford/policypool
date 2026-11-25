@@ -83,30 +83,30 @@ func assertHidden(t *testing.T, err error, hidden ...string) {
 // and returns the error with the text that must not appear in it.
 type kindEntry struct {
 	name string
-	open func(context.Context, *testing.T, *hostileScenario) (error, string)
+	open func(context.Context, *testing.T, *hostileScenario) (string, error)
 }
 
 var (
-	openEntry = kindEntry{name: "Open", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (error, string) {
+	openEntry = kindEntry{name: "Open", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (string, error) {
 		name := registerHostileDriver(t, scenario)
 		db, err := Open(ctx, name, "dsn="+kindSecret, ForeignKeysRequired)
 		if db != nil {
 			_ = db.Close()
 			t.Fatal("Open published a pool")
 		}
-		return err, name
+		return name, err
 	}}
-	connectorEntry = kindEntry{name: "OpenConnector", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (error, string) {
+	connectorEntry = kindEntry{name: "OpenConnector", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (string, error) {
 		db, err := OpenConnector(ctx, &dsnConnector{base: scenario, dsn: "dsn=" + kindSecret}, ForeignKeysRequired)
 		if db != nil {
 			_ = db.Close()
 			t.Fatal("OpenConnector published a pool")
 		}
-		return err, ""
+		return "", err
 	}}
-	probeEntry = kindEntry{name: "ProbeForeignKeys", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (error, string) {
+	probeEntry = kindEntry{name: "ProbeForeignKeys", open: func(ctx context.Context, t *testing.T, scenario *hostileScenario) (string, error) {
 		_, err := ProbeForeignKeys(ctx, &dsnConnector{base: scenario, dsn: "dsn=" + kindSecret})
-		return err, ""
+		return "", err
 	}}
 	everyEntry = []kindEntry{openEntry, connectorEntry, probeEntry}
 )
@@ -128,7 +128,7 @@ func runKindCases(t *testing.T, want error, cases []kindCase) {
 		for _, entry := range entries {
 			t.Run(test.name+"/"+entry.name, func(t *testing.T) {
 				scenario := &hostileScenario{plans: []hostilePlan{test.plan}, openErr: test.openErr}
-				err, hidden := entry.open(context.Background(), t, scenario)
+				hidden, err := entry.open(context.Background(), t, scenario)
 				assertKind(t, err, want, hidden)
 			})
 		}
@@ -326,7 +326,7 @@ func TestCancellationAndBadConnectionKeepTheirIdentity(t *testing.T) {
 		for _, entry := range everyEntry {
 			t.Run(test.name+"/"+entry.name, func(t *testing.T) {
 				scenario := &hostileScenario{plans: []hostilePlan{test.plan}, openErr: test.openErr}
-				err, hidden := entry.open(context.Background(), t, scenario)
+				hidden, err := entry.open(context.Background(), t, scenario)
 				if !errors.Is(err, test.identity) {
 					t.Fatalf("error %q lost %v", err, test.identity)
 				}
