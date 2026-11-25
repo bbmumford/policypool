@@ -3,7 +3,7 @@ module github.com/bbmumford/policypool
 go 1.25.0
 
 require (
-	github.com/bbmumford/filekind v0.1.1
+	github.com/bbmumford/filekind v0.1.2
 	modernc.org/sqlite v1.53.0
 )
 
