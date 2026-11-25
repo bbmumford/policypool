@@ -16,16 +16,22 @@ import (
 // WHAT CONSUMES IT: OpenFile and OpenFileConnector, which check the header when
 // the pool opens, stamp a new empty file with it, and refuse every caller's
 // statement that would assign either header field; AdvanceGeneration, the one
-// way such a pool's file moves to a later generation.
+// way such a pool's file moves to a later generation; CheckIdentity, for a pool
+// this package did not open.
 //
 // CONDITIONS. Generation is the generation this code writes and the newest it
 // reads. Oldest is the oldest it reads; 0 reads Generation only, so a release
 // that still reads the file an older release left declares that generation
-// until its update is confirmed.
+// until its update is confirmed. CheckOnly is for a file that is a copy of a
+// database its source stamped, as an embedded replica is: the header is
+// checked and never stamped, so an unstamped file is refused like any other
+// file not of the kind, since stamping the copy would give it a header its
+// source does not carry and the source's next page 1 would take it away.
 type Identity struct {
 	Kind       filekind.Kind
 	Generation int32
 	Oldest     int32
+	CheckOnly  bool
 }
 
 func (id Identity) want() filekind.Want {
@@ -66,7 +72,8 @@ func (e *identityError) Unwrap() error        { return e.cause }
 // assigning application_id or user_version with ErrPolicyRefused.
 //
 // It is for a file one process owns; a file that is a copy of another database,
-// as an embedded replica is, carries the header its source stamped.
+// as an embedded replica is, carries the header its source stamped and is
+// opened with a CheckOnly identity, which checks and never stamps.
 func OpenFile(ctx context.Context, driverName, dsn string, policy ConnectionPolicy, identity Identity) (*sql.DB, error) {
 	return openNamed(ctx, driverName, dsn, policy, &identity)
 }
@@ -93,13 +100,32 @@ func proveIdentity(ctx context.Context, db *sql.DB, identity Identity) error {
 	}
 	defer releaseConn(conn)
 	h, err := filekind.Check(ctx, conn, identity.want())
-	if err != nil && h == (filekind.Header{}) && errors.Is(err, filekind.ErrUnstamped) {
+	if err != nil && !identity.CheckOnly && h == (filekind.Header{}) && errors.Is(err, filekind.ErrUnstamped) {
 		err = withStamping(conn, func() error {
 			_, err := filekind.Create(ctx, conn, identity.Kind, identity.Generation, nil)
 			return err
 		})
 	}
 	return identityRefusal(ctx, err)
+}
+
+// CheckIdentity checks the header of the file behind db, a pool this package
+// did not open, against identity, and never stamps it, whatever CheckOnly
+// says: the file is refused (ErrFileIdentity) unless it carries identity's
+// kind at a generation identity reads. Engine failures keep the package's
+// redaction.
+//
+// WHAT CONSUMES IT: a holder whose connections cannot carry a ConnectionPolicy,
+// such as a read-only embedded replica's pool, whose engine refuses the
+// foreign-key pragma as a statement it would send to the primary; any pool that
+// can carry one opens through OpenFileConnector with a CheckOnly identity
+// instead, which also refuses header assignments on every connection.
+func CheckIdentity(ctx context.Context, db *sql.DB, identity Identity) error {
+	if ctx == nil || db == nil || !identity.valid() {
+		return ErrPolicyRefused
+	}
+	identity.CheckOnly = true
+	return proveIdentity(ctx, db, identity)
 }
 
 // AdvanceGeneration moves the file of a pool opened with OpenFile or
@@ -109,7 +135,8 @@ func proveIdentity(ctx context.Context, db *sql.DB, identity Identity) error {
 // checkpointed into the file. migrate runs under the pool's refusals, header
 // assignments included.
 //
-// It refuses (ErrPolicyRefused) a pool opened without an Identity, and refuses
+// It refuses (ErrPolicyRefused) a pool opened without an Identity or with a
+// CheckOnly one, whose file only its source may change, and refuses
 // (ErrFileIdentity) a file not of the pool's kind or already past generation;
 // advancing to the generation a file holds runs migrate and changes nothing
 // else. The pool's own Identity is not changed: the caller reopens with the
@@ -126,7 +153,7 @@ func AdvanceGeneration(ctx context.Context, db *sql.DB, generation int32, migrat
 	var identity *Identity
 	if err := conn.Raw(func(dc any) error {
 		pc, ok := dc.(*policyConn)
-		if !ok || pc.identity == nil {
+		if !ok || pc.identity == nil || pc.identity.CheckOnly {
 			return ErrPolicyRefused
 		}
 		identity = pc.identity
