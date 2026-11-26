@@ -68,9 +68,14 @@ func (p ConnectionPolicy) defined() bool {
 // pool is returned. Policy is also established and proved on every later
 // physical connection created by the pool.
 //
-// Connection and policy errors are redacted because a driver can include a
-// data-source name or authentication material in them. What a caller gets
-// instead is one kind, told apart with errors.Is: ErrPolicyRefused,
+// Errors from opening, connecting, resetting and closing a connection, and the
+// policy's own refusals, are redacted because a driver can include a
+// data-source name or authentication material in them. Every other error a
+// connection returns once it is handed out (a statement's Exec, Query or
+// Prepare, a transaction's begin, a Ping) is the driver's as it returned it,
+// because it is about the caller's own call, not the connection. What a
+// caller gets for a redacted error instead is one kind, told apart with
+// errors.Is: ErrPolicyRefused,
 // ErrPolicyUnproved, ErrUnreachable, ErrUnauthorized, ErrNotADatabase or
 // ErrDriverFailed. No kind carries any of the driver's text. Cancellation and
 // driver.ErrBadConn retain errors.Is identity; an open that ctx cancelled or
