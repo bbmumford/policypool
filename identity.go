@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"time"
 
 	"github.com/bbmumford/filekind"
 )
@@ -57,6 +58,51 @@ func (id Identity) valid() bool {
 // an authoritative file's opener stops and reports it.
 var ErrFileIdentity = errors.New("policypool: file identity refused")
 
+// ErrFileBusy is an open's or AdvanceGeneration's answer when the header it
+// wrote committed but the checkpoint that carries it into the main file was
+// kept from finishing by another connection's read, after the bounded retries
+// checkpointHeader makes. The file holds the identity, read through the engine;
+// only the bytes on disk lag. It is never ErrFileIdentity, so a cache's opener
+// retries the open instead of rebuilding a file it stamped correctly. It also
+// matches filekind.ErrCheckpointBusy (errors.Is).
+var ErrFileBusy = errors.New("policypool: file busy")
+
+type busyError struct{ cause error }
+
+func (e *busyError) Error() string        { return ErrFileBusy.Error() + ": " + e.cause.Error() }
+func (e *busyError) Is(target error) bool { return target == ErrFileBusy }
+func (e *busyError) Unwrap() error        { return e.cause }
+
+// checkpointTries and checkpointFirstWait bound checkpointHeader's retries:
+// up to eight checkpoints with waits doubling from 5ms and capped at 250ms,
+// about 0.8s in all, long enough for a concurrent opener's first reads to end.
+const (
+	checkpointTries     = 8
+	checkpointFirstWait = 5 * time.Millisecond
+	checkpointMaxWait   = 250 * time.Millisecond
+)
+
+// checkpointHeader retries the checkpoint a header write left busy, on conn,
+// until it finishes, ctx ends, or checkpointTries checkpoints have been busy;
+// it answers the last checkpoint's result or ctx's error.
+func checkpointHeader(ctx context.Context, conn *sql.Conn, err error) error {
+	wait := checkpointFirstWait
+	for try := 1; try < checkpointTries && errors.Is(err, filekind.ErrCheckpointBusy); try++ {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		err = filekind.Checkpoint(ctx, conn)
+		if wait *= 2; wait > checkpointMaxWait {
+			wait = checkpointMaxWait
+		}
+	}
+	return err
+}
+
 type identityError struct{ cause error }
 
 func (e *identityError) Error() string        { return ErrFileIdentity.Error() + ": " + e.cause.Error() }
@@ -105,6 +151,8 @@ func proveIdentity(ctx context.Context, db *sql.DB, identity Identity) error {
 			_, err := filekind.Create(ctx, conn, identity.Kind, identity.Generation, nil)
 			return err
 		})
+		// The stamp committed; a busy checkpoint only delays the bytes on disk.
+		err = checkpointHeader(ctx, conn, err)
 	}
 	return identityRefusal(ctx, err)
 }
@@ -178,7 +226,7 @@ func AdvanceGeneration(ctx context.Context, db *sql.DB, generation int32, migrat
 	if err := tx.Commit(); err != nil {
 		return publicErrorUnder(ctx, err)
 	}
-	return identityRefusal(ctx, filekind.Checkpoint(ctx, conn))
+	return identityRefusal(ctx, checkpointHeader(ctx, conn, filekind.Checkpoint(ctx, conn)))
 }
 
 // withStamping runs f with conn's header-assignment refusal lifted, and always
@@ -205,10 +253,11 @@ func withStamping(conn *sql.Conn, f func() error) error {
 	return err
 }
 
-// identityRefusal is nil for nil; ErrFileIdentity around a header refusal, a
-// header the engine did not answer as one integer, or a checkpoint that could
-// not finish, whose texts hold only numbers; and the package's redacted kind
-// for anything else the engine returned.
+// identityRefusal is nil for nil; ErrFileIdentity around a header refusal or a
+// header the engine did not answer as one integer; ErrFileBusy around a
+// checkpoint that could not finish, which refuses nothing about the file; both
+// texts hold only numbers; and the package's redacted kind for anything else
+// the engine returned.
 func identityRefusal(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
@@ -217,7 +266,10 @@ func identityRefusal(ctx context.Context, err error) error {
 	if errors.As(err, &refused) {
 		return &identityError{cause: refused}
 	}
-	if errors.Is(err, filekind.ErrCheckpointBusy) || errors.Is(err, filekind.ErrUnreadableHeader) {
+	if errors.Is(err, filekind.ErrCheckpointBusy) {
+		return &busyError{cause: err}
+	}
+	if errors.Is(err, filekind.ErrUnreadableHeader) {
 		return &identityError{cause: err}
 	}
 	if errors.Is(err, ErrPolicyRefused) {
