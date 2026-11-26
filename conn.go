@@ -4,7 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"io"
+	"math"
+	"sync/atomic"
+
+	"github.com/bbmumford/filekind"
 )
 
 type policyConnector struct {
@@ -13,6 +18,11 @@ type policyConnector struct {
 	// identity is set on a pool opened with OpenFile or OpenFileConnector,
 	// and makes every connection it opens refuse header assignments.
 	identity *Identity
+	// proved is set by openProved once the pool's first connection proved
+	// identity; from then on every new physical connection reads its own
+	// file's kind before it is handed out (connectionKind), so a file
+	// replaced at the path after the pool opened is refused, not used.
+	proved atomic.Bool
 }
 
 func (c *policyConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -34,6 +44,14 @@ func (c *policyConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	}
 	if err := enforce(ctx, conn, c.policy); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
+	}
+	if c.identity != nil && c.proved.Load() {
+		if err := connectionKind(ctx, conn, c.identity.Kind); err != nil {
+			if closeErr := conn.Close(); closeErr != nil {
+				return nil, errors.Join(err, publicErrorUnder(ctx, closeErr))
+			}
+			return nil, err
+		}
 	}
 	if err := contextError(ctx); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, conn.Close()))
@@ -245,4 +263,61 @@ func (c *policyConn) CheckNamedValue(value *driver.NamedValue) error {
 		return driver.ErrSkip
 	}
 	return checker.CheckNamedValue(value)
+}
+
+// connectionKind reads the header of the file conn opened and refuses it
+// (ErrFileIdentity) unless it is a stamped file of kind. Any generation is
+// accepted: AdvanceGeneration moves the file past the pool's Identity, which
+// its holder reopens with once the update is confirmed, and the pool's own
+// connections keep serving until then. Engine failures keep the package's
+// redaction.
+func connectionKind(ctx context.Context, conn driver.Conn, kind filekind.Kind) error {
+	app, err := pragmaValue(ctx, conn, "PRAGMA application_id")
+	if err != nil {
+		return connectionKindError(ctx, err)
+	}
+	version, err := pragmaValue(ctx, conn, "PRAGMA user_version")
+	if err != nil {
+		return connectionKindError(ctx, err)
+	}
+	if app < math.MinInt32 || app > math.MaxInt32 || version < math.MinInt32 || version > math.MaxInt32 {
+		return &identityError{cause: filekind.ErrUnreadableHeader}
+	}
+	h := filekind.Header{ApplicationID: int32(app), UserVersion: int32(version)}
+	if err := h.Expect(filekind.Want{Kind: kind, Newest: math.MaxInt32}); err != nil {
+		return &identityError{cause: err}
+	}
+	return nil
+}
+
+// connectionKindError is ErrFileIdentity for a header pragma that did not
+// answer one integer, and the package's redacted kind for anything else.
+func connectionKindError(ctx context.Context, err error) error {
+	if errors.Is(err, filekind.ErrUnreadableHeader) {
+		return &identityError{cause: err}
+	}
+	return publicErrorUnder(ctx, err)
+}
+
+// pragmaValue reads the one integer a header pragma answers on conn.
+func pragmaValue(ctx context.Context, conn driver.Conn, query string) (int64, error) {
+	rows, err := queryPolicy(ctx, conn, query)
+	if err != nil {
+		return 0, err
+	}
+	dest := make([]driver.Value, 1)
+	if len(rows.Columns()) != 1 {
+		return 0, closeRows(ctx, rows, filekind.ErrUnreadableHeader)
+	}
+	if err := rows.Next(dest); err != nil {
+		if errors.Is(err, io.EOF) {
+			err = filekind.ErrUnreadableHeader
+		}
+		return 0, closeRows(ctx, rows, err)
+	}
+	v, ok := dest[0].(int64)
+	if !ok {
+		return 0, closeRows(ctx, rows, filekind.ErrUnreadableHeader)
+	}
+	return v, closeRows(ctx, rows, nil)
 }

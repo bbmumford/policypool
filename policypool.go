@@ -152,7 +152,8 @@ func openConnector(ctx context.Context, base driver.Connector, policy Connection
 // it on a query. With an identity, the file's header is proved next, on the
 // same terms: a pool whose file is not what identity names is never returned.
 func openProved(ctx context.Context, base driver.Connector, policy ConnectionPolicy, identity *Identity) (*sql.DB, error) {
-	db := sql.OpenDB(&policyConnector{base: base, policy: policy, identity: identity})
+	connector := &policyConnector{base: base, policy: policy, identity: identity}
+	db := sql.OpenDB(connector)
 	if err := db.PingContext(ctx); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, db.Close()))
 	}
@@ -161,6 +162,7 @@ func openProved(ctx context.Context, base driver.Connector, policy ConnectionPol
 			_ = db.Close()
 			return nil, err
 		}
+		connector.proved.Store(true)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, publicErrorUnder(ctx, preferredCause(err, db.Close()))
